@@ -1,0 +1,52 @@
+
+#EFFICIENTNET
+nc: 3  # Number of classes
+scales:
+  n: [0.33, 0.25, 1024]
+  s: [0.33, 0.50, 1024]
+  m: [0.67, 0.75, 768]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.25, 512]
+
+backbone:
+  # Layer 0: Load EfficientNet-B0 via TorchVision.
+  # split=True returns all intermediate outputs (indices 0..8)
+  - [-1, 1, TorchVision, [1280, "efficientnet_b0", "DEFAULT", True, 2, True]]  # backbone index 0
+
+  # To mimic the original YOLOv8 backbone (which has 10 outputs), add two Identity layers as placeholders:
+  - [-1, 1, nn.Identity, []]   # backbone index 1
+  - [-1, 1, nn.Identity, []]   # backbone index 2
+
+  # ----- P3 branch (target: 256 channels at 80×80) -----
+  # Extract EfficientNet output at index 3: shape [1, 40, 80, 80]
+  - [0, 1, Index, [40, 4]]       # extracts raw feature from efficientnet layer 3 → backbone index 3
+  - [-1, 1, Conv, [256, 1, 1]]     # project from 40 to 256 channels
+  - [-1, 1, nn.Identity, []]      # pin this as backbone index 4 (P3)
+
+  # ----- P4 branch (target: 512 channels at 40×40) -----
+  # Extract EfficientNet output at index 5: shape [1, 112, 40, 40]
+  - [0, 1, Index, [112, 6]]      # extracts raw feature from efficientnet layer 5 → backbone index 5
+  - [-1, 1, Conv, [512, 1, 1]]     # project from 112 to 512 channels
+  - [-1, 1, nn.Identity, []]      # pin this as backbone index 6 (P4)
+
+  # ----- P5 branch (target: 1024 channels at 20×20) -----
+  # Extract EfficientNet output at index 8: shape [1, 1280, 20, 20]
+  - [0, 1, Index, [1280, 9]]     # extracts raw feature from efficientnet layer 8 → backbone index 7
+  - [-1, 1, Conv, [1024, 1, 1]]    # project from 1280 to 1024 channels → backbone index 8
+  - [-1, 1, SPPF, [1024, 5]]      # SPPF block finalizes P5 → backbone index 9
+
+head:
+  # Retain the original YOLOv8 head exactly.
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 6], 1, Concat, [1]]       # Concatenate upsampled P5 (backbone index 9) with P4 (backbone index 6)
+  - [-1, 3, C2f, [512, True]]
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 4], 1, Concat, [1]]       # Concatenate upsampled result with P3 (backbone index 4)
+  - [-1, 3, C2f, [256, True]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 12], 1, Concat, [1]]
+  - [-1, 3, C2f, [512, True]]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 9], 1, Concat, [1]]
+  - [-1, 3, C2f, [1024, True]]
+  - [[17, 20, 23], 1, Detect, [nc]]
